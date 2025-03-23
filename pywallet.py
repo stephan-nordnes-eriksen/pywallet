@@ -41,7 +41,10 @@ except:
 	except:
 		missing_dep.append('bsddb')
 
-import os, sys, time, re
+import os
+import sys
+import time
+import re
 pyw_filename = os.path.basename(__file__)
 pyw_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -59,15 +62,12 @@ import logging
 import struct
 import traceback
 import socket
-import types
-import string
 import hashlib
 import random
 import urllib
 import math
 import base64
 import collections
-import weakref
 import binascii
 from types import MethodType
 import unittest
@@ -83,7 +83,7 @@ def ordsix(x):
 	if x.__class__ == int:return x
 	return ord(x)
 def chrsix(x):
-	if not(x.__class__ in [int, long]):return x
+	if x.__class__ not in [int, long]:return x
 	if PY3:return bytes([x])
 	return chr(x)
 
@@ -134,11 +134,11 @@ backup_balance_site ='https://api.blockcypher.com/v1/btc/main/addrs/'
 
 aversions = {}
 for i in range(256):
-	aversions[i] = "version %d" % i;
-aversions[0] = 'Bitcoin';
-aversions[48] = 'Litecoin';
-aversions[52] = 'Namecoin';
-aversions[111] = 'Testnet';
+	aversions[i] = "version %d" % i
+aversions[0] = 'Bitcoin'
+aversions[48] = 'Litecoin'
+aversions[52] = 'Namecoin'
+aversions[111] = 'Testnet'
 
 class Network(collections.namedtuple('Network', 'name p2pkh_prefix p2sh_prefix wif_prefix segwit_hrp')):
 	instances = []
@@ -326,7 +326,7 @@ class KeccakHash:
 	def preset(bitrate_bits,capacity_bits,output_bits):
 		def create(initial_input=None):
 			h=KeccakHash(bitrate_bits,capacity_bits,output_bits)
-			if not(initial_input is None):h.update(initial_input)
+			if initial_input is not None:h.update(initial_input)
 			return h
 		return create
 Keccak256 = KeccakHash.preset(1088, 512, 256)
@@ -901,7 +901,7 @@ class AESModeOfOperation(object):
 						else:
 							plaintext[i] = iput[i] ^ output[i]
 					firstRound = False
-					if not(originalsize is None) and originalsize < end:
+					if originalsize is not None and originalsize < end:
 						for k in range(originalsize-start):
 							stringOut += chrsix(plaintext[k])
 					else:
@@ -1407,7 +1407,7 @@ def b58decode(v, length, __b58chars=__b58chars):
 		else: break
 
 	result = chrsix(0)*nPad + result
-	if not(length is None) and len(result) != length:
+	if length is not None and len(result) != length:
 		return None
 
 	return result
@@ -1634,7 +1634,39 @@ def readpartfile(fd, offset, length):   #make everything 512*n because of window
 	os.lseek(fd, new_offset, os.SEEK_SET)
 	disk_part=os.read(fd, big_length)
 	return disk_part[rest:rest+length]
+	def recov_ckey(fd: int, offset: int) -> Optional[List[bytes]]:
+		disk_part = readpartfile(fd, offset-49, 122)
+		me = multiextract(disk_part, [1, 48, 4, 4, 1])
 
+		checks = []
+		checks.append([0, '30'])
+		checks.append([3, '636b6579'])
+		if sum(map(lambda x: int(me[x[0]] != binascii.unhexlify(x[1])), checks)):  #number of false statements
+			return None
+
+		return me
+
+	def recov_mkey(fd: int, offset: int) -> Optional[List[bytes]]:
+		disk_part = readpartfile(fd, offset-72, 84)
+		me = multiextract(disk_part, [4, 48, 1, 8, 4, 4, 1, 2, 8, 4])
+
+		checks = []
+		checks.append([0, '43000130'])
+		checks.append([2, '08'])
+		checks.append([6, '00'])
+		checks.append([8, '090001046d6b6579'])
+		if sum(map(lambda x: int(me[x[0]] != binascii.unhexlify(x[1])), checks)):  #number of false statements
+			return None
+
+		return me
+
+	def recov_uckey(fd: int, offset: int) -> Union[List[bytes], Tuple[None, None, None, None, bytes]]:
+		dd = readpartfile(fd, offset, 223)
+		r = []
+		for beg in map(binascii.unhexlify, ['3081d30201010420', '308201130201010420']):
+			for chunk in drop_first(dd.split(beg)):
+				r.append(chunk[:32])
+		return r and (None, None, None, None, r[0])
 def recov_ckey(fd, offset):
 	disk_part=readpartfile(fd, offset-49, 122)
 	me=multiextract(disk_part, [1,48,4,4,1])
@@ -2112,7 +2144,7 @@ class KEY:
 			der.encode_octet_string (encoded_gxgy),
 			der.encode_integer (_r),
 			der.encode_integer (1),
-		);
+		)
 		encoded_vk = "\x00\x04" + self.pubkey.to_string ()
 		return der.encode_sequence (
 			der.encode_integer (1),
@@ -2251,7 +2283,7 @@ def open_wallet(db_env, walletfile, writable=False):
 		print(e)
 		r = True
 
-	if not(r is None):
+	if r is not None:
 		logging.error("Couldn't open wallet.dat/main. Try quitting Bitcoin and running this again.")
 		sys.exit(1)
 
@@ -2361,7 +2393,7 @@ def parse_wallet(db, item_callback):
 
 			item_callback(type, d)
 
-		except Exception as e:
+		except Exception:
 			traceback.print_exc()
 			print("ERROR parsing wallet.dat, type %s" % type)
 			print("key data: %s"%key)
@@ -2619,7 +2651,7 @@ def update_wallet(db, types, datas, paramsAreLists=False):
 			# Write the key/value pair to the database
 			db.put(kds.input, vds.input)
 
-		except Exception as e:
+		except Exception:
 			print("ERROR writing to wallet.dat, type %s"%type)
 			print("data dictionary: %r"%data)
 			traceback.print_exc()
@@ -2632,7 +2664,7 @@ def create_new_wallet(db_env, walletfile, version):
 	except DBError:
 		r = True
 
-	if not(r is None):
+	if r is not None:
 		logging.error("Couldn't open %s."%walletfile)
 		sys.exit(1)
 
@@ -2650,7 +2682,7 @@ def rewrite_wallet(db_env, walletfile, destFileName, pre_put_callback=None):
 	except DBError:
 		r = True
 
-	if not(r is None):
+	if r is not None:
 		logging.error("Couldn't open %s."%destFileName)
 		sys.exit(1)
 
@@ -2895,7 +2927,7 @@ def pubkey_info(pubkey, network):
 	return addr, p2wpkh, witaddr, h160
 
 def keyinfo(sec, network=None, print_info=False, force_compressed=None):
-	if not(network is None) and network.__class__ != Network:
+	if network is not None and network.__class__ != Network:
 		network = find_network(network) or network
 	if sec.__class__ == Xpriv:
 		assert sec.ktype == 0
@@ -3079,15 +3111,15 @@ def verify_message_signature(pubkey, sign, msg, msgIsHex=False):
 	return k.verify(message_to_hash(msg, msgIsHex), binascii.unhexlify(sign))
 
 
-OP_DUP = 118;
-OP_HASH160 = 169;
-OP_EQUALVERIFY = 136;
-OP_CHECKSIG = 172;
+OP_DUP = 118
+OP_HASH160 = 169
+OP_EQUALVERIFY = 136
+OP_CHECKSIG = 172
 
-XOP_DUP = "%02x"%OP_DUP;
-XOP_HASH160 = "%02x"%OP_HASH160;
-XOP_EQUALVERIFY = "%02x"%OP_EQUALVERIFY;
-XOP_CHECKSIG = "%02x"%OP_CHECKSIG;
+XOP_DUP = "%02x"%OP_DUP
+XOP_HASH160 = "%02x"%OP_HASH160
+XOP_EQUALVERIFY = "%02x"%OP_EQUALVERIFY
+XOP_CHECKSIG = "%02x"%OP_CHECKSIG
 
 BTC = 1e8
 
@@ -3191,8 +3223,8 @@ def create_transaction(secret_key, hashes_txin, indexes_txin, pubkey_txin, prevS
 def inverse_str(string):
 	ret = ""
 	for i in range(len(string)//2):
-		ret += string[len(string)-2-2*i];
-		ret += string[len(string)-2-2*i+1];
+		ret += string[len(string)-2-2*i]
+		ret += string[len(string)-2-2*i+1]
 	return ret
 
 def read_table(table, beg, end):
@@ -3459,6 +3491,7 @@ def retrieve_last_pywallet_md5():
 	md5_last_pywallet = [True, md5_onlinefile('https://raw.github.com/jackjack-jj/pywallet/master/pywallet.py')]
 
 from optparse import OptionParser
+from typing import List, Optional, Tuple, Union
 
 def bech32_polymod(values):
 	GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
@@ -4012,7 +4045,7 @@ if __name__ == '__main__':
 	if options.passphrase:
 		passphrase = options.passphrase
 
-	if not(options.clone_watchonly_from is None) and options.clone_watchonly_to:
+	if options.clone_watchonly_from is not None and options.clone_watchonly_to:
 		clone_wallet(options.clone_watchonly_from, options.clone_watchonly_to)
 		exit(0)
 
@@ -4095,10 +4128,10 @@ if __name__ == '__main__':
 	if 'ecdsa' in missing_dep:
 		print("Warning: 'ecdsa' package is not installed, so you won't be able to sign/verify messages but everything else will work fine")
 
-	if not(options.dcv is None):
+	if options.dcv is not None:
 		max_version = 10 ** 9
 
-	if not(options.datadir is None):
+	if options.datadir is not None:
 		print("Depreacation")
 		print("  The --datadir option has been deprecated, now the full path of the wallet file should go to --wallet")
 		print("  If you're not sure what to do, concatenating the old --datadir content, then a directory separator, then the old --wallet should do the trick")
@@ -4112,12 +4145,12 @@ if __name__ == '__main__':
 			exit()
 		db_dir, wallet_name = os.path.split(os.path.realpath(options.walletfile))
 
-	if not(options.key_balance is None):
+	if options.key_balance is not None:
 		print(balance(balance_site, options.key_balance))
 		exit(0)
 
 	network = network_bitcoin
-	if not(options.otherversion is None):
+	if options.otherversion is not None:
 		try:
 			network = find_network(options.otherversion)
 			if not network:
@@ -4135,7 +4168,7 @@ if __name__ == '__main__':
 	elif options.ethereum:
 		network = network_ethereum
 
-	if not(options.keyinfo is None) or options.random_key:
+	if options.keyinfo is not None or options.random_key:
 		if not options.keyinfo:
 			options.key = binascii.hexlify(os.urandom(32))
 		keyinfo(options.key, network, True, False)
@@ -4149,7 +4182,7 @@ if __name__ == '__main__':
 		exit()
 	db_env = create_env(db_dir)
 
-	if not(options.multidelete is None):
+	if options.multidelete is not None:
 		filename=options.multidelete
 		filin = open(filename, 'r')
 		content = filin.read().split('\n')
@@ -4212,7 +4245,7 @@ if __name__ == '__main__':
 		print("\nError: all your addresses seem to be used, pywallet can't create a safe minimal wallet to share")
 		exit()
 
-	read_wallet(json_db, db_env, wallet_name, True, True, "", not(options.dumpbalance is None))
+	read_wallet(json_db, db_env, wallet_name, True, True, "", options.dumpbalance is not None)
 
 	if json_db.get('minversion', 99999999) > max_version:
 		print("Version mismatch (must be <= %d)" % max_version)
