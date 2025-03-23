@@ -1,0 +1,11 @@
+[project]
+name = "pywallet"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12.3"
+dependencies = [
+    "infer-types>=1.0.0",
+    "pytype>=2024.10.11",
+    "ruff>=0.11.2",
+]
