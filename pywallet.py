@@ -2630,7 +2630,7 @@ def search_patterns_on_disk(
             for text in patternlist:
                 if text in data:
                     offset = i - len(datakept)
-                    offsetslist = [offset + m.start for m in re.finditer(text, data)]
+                    offsetslist = [offset + m.start() for m in re.finditer(text, data)]
                     yield BlockResults(data, text, offset, offsetslist)
                     pass
             sizetokeep = 20  # 20 because all the patterns have a len<20. Could be higher.

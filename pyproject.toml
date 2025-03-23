@@ -11,7 +11,6 @@ dependencies = [
 ]
 [tool.ruff]
 # Enable pycodestyle, Pyflakes, and import sorting
-select = ["E", "F", "I"]
 # Line length to match black's default
 line-length = 100
 # Target Python version
@@ -25,9 +24,16 @@ exclude = [
     "dist",
 ]
 
-[tool.ruff.isort]
-known-first-party = ["pywallet"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# Allow minus-sign (U+2212), greek-small-letter-rho (U+03C1), and the asterisk-operator (U+2217),
+# which could be confused for "-", "p", and "*", respectively.
+allowed-confusables = ["−", "ρ", "∗"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pywallet"]
