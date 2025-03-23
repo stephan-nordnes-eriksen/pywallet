@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 #-*- coding: utf-8 -*-
 from __future__ import print_function
+from typing import Generator
 pywversion="2.2"
 never_update=False
 
@@ -1205,11 +1206,11 @@ class Signature( object ):
 		self.s = s
 
 class Public_key( object ):
-	def __init__( self, generator, point, c=None ):
+	def __init__( self, generator, point, compress=None ):
 		self.curve = generator.curve()
 		self.generator = generator
 		self.point = point
-		self.compressed = c
+		self.compressed = compress
 		n = generator.order()
 		if not n:
 			raise RuntimeError("Generator point must have order.")
@@ -1240,8 +1241,8 @@ class Public_key( object ):
 
 		return binascii.unhexlify(pk)
 
-	def get_addr(self, v=0):
-		return public_key_to_bc_address(self.ser(), v)
+	def get_addr(self, version=0):
+		return public_key_to_bc_address(self.ser(), version)
 
 	@classmethod
 	def from_ser(cls, g, ser):
@@ -1340,16 +1341,16 @@ def hash_160(public_key):
 	md.update(hashlib.sha256(public_key).digest())
 	return md.digest()
 
-def public_key_to_bc_address(public_key, v=None):
-	if v==None:
-		v=network.p2pkh_prefix
+def public_key_to_bc_address(public_key, version=None):
+	if version==None:
+		version=network.p2pkh_prefix
 	h160 = hash_160(public_key)
-	return hash_160_to_bc_address(h160, v)
+	return hash_160_to_bc_address(h160, version)
 
-def hash_160_to_bc_address(h160, v=None):
-	if v==None:
-		v=network.p2pkh_prefix
-	vh160 = chrsix(v) + h160
+def hash_160_to_bc_address(h160, version=None):
+	if version==None:
+		version=network.p2pkh_prefix
+	vh160 = chrsix(version) + h160
 	h = Hash(vh160)
 	addr = vh160 + h[0:4]
 	return b58encode(addr)
@@ -1542,7 +1543,15 @@ def overlapped_read(f, sz, overlap, maxlen=None):
 		buffer = buffer[-overlap:] + new_content
 		yield buffer
 
-def search_patterns_on_disk(device, size, inc, patternlist):   # inc must be higher than 1k
+class BlockResults(object):
+	def __init__(self, block, text, offset, offsetlint):
+		self.block = block
+		self.text = text
+		self.offset = offset
+		self.offsetlist = offsetlint
+
+def search_patterns_on_disk(device: str, size: int, inc: int, patternlist: list[bytes]) -> Generator[BlockResults, None, None]:
+	# inc must be higher than 1k
 	try:
 		otype=os.O_RDONLY|os.O_BINARY
 	except:
@@ -1557,9 +1566,8 @@ def search_patterns_on_disk(device, size, inc, patternlist):   # inc must be hig
 	i = 0
 	data=b''
 
-	tzero=time.time()
+	# tzero=time.time()
 	sizetokeep=0
-	BlocksToInspect=dict(map(lambda x:[x,[]], patternlist))
 	lendataloaded=None
 	writeProgressEvery=100*Mo
 	while i < int(size) and (lendataloaded!=0 or lendataloaded==None):
@@ -1571,7 +1579,9 @@ def search_patterns_on_disk(device, size, inc, patternlist):   # inc must be hig
 			lendataloaded = len(data)-len(datakept)   #should be inc
 			for text in patternlist:
 				if text in data:
-					BlocksToInspect[text].append([i-len(datakept), data, len(datakept)])
+					offset = i-len(datakept)
+					offsetslist = [offset + m.start for m in re.finditer(text, data)]
+					yield BlockResults(data, text, offset, offsetslist)
 					pass
 			sizetokeep=20   # 20 because all the patterns have a len<20. Could be higher.
 			i += lendataloaded
@@ -1583,17 +1593,12 @@ def search_patterns_on_disk(device, size, inc, patternlist):   # inc must be hig
 			i += lendataloaded
 			continue
 	os.close(fd)
-
-	AllOffsets=dict(map(lambda x:[repr(x),[]], patternlist))
-	for text,blocks in BlocksToInspect.items():
-		for offset,data,ldk in blocks:  #ldk = len(datakept)
-			offsetslist=[offset+m.start() for m in re.finditer(text, data)]
-			AllOffsets[repr(text)].extend(offsetslist)
-
-	AllOffsets['PRFdevice']=device
-	AllOffsets['PRFdt']=time.time()-tzero
-	AllOffsets['PRFsize']=i
-	return AllOffsets
+	
+	# AllOffsets=dict()
+	# AllOffsets['PRFdevice']=device
+	# AllOffsets['PRFdt']=time.time()-tzero
+	# AllOffsets['PRFsize']=i
+	# return AllOffsets
 
 def multiextract(s, ll):
 	r=[]
@@ -1627,12 +1632,12 @@ def readpartfile(fd, offset, length):   #make everything 512*n because of window
 	new_offset=offset-rest
 	big_length=512*(int((length+rest-1)//512)+1)
 	os.lseek(fd, new_offset, os.SEEK_SET)
-	d=os.read(fd, big_length)
-	return d[rest:rest+length]
+	disk_part=os.read(fd, big_length)
+	return disk_part[rest:rest+length]
 
 def recov_ckey(fd, offset):
-	d=readpartfile(fd, offset-49, 122)
-	me=multiextract(d, [1,48,4,4,1])
+	disk_part=readpartfile(fd, offset-49, 122)
+	me=multiextract(disk_part, [1,48,4,4,1])
 
 	checks=[]
 	checks.append([0, '30'])
@@ -1643,8 +1648,8 @@ def recov_ckey(fd, offset):
 	return me
 
 def recov_mkey(fd, offset):
-	d=readpartfile(fd, offset-72, 84)
-	me=multiextract(d, [4,48,1,8,4,4,1,2,8,4])
+	disk_part=readpartfile(fd, offset-72, 84)
+	me=multiextract(disk_part, [4,48,1,8,4,4,1,2,8,4])
 
 	checks=[]
 	checks.append([0, '43000130'])
@@ -1709,173 +1714,179 @@ def recov(device, passes, size=102400, inc=10240, outputdir='.'):
 
 
 	if not device.startswith('PartialRecoveryFile:'):
-		r=search_patterns_on_disk(device, size, inc, nameToDBName.values())
-		f=open(outputdir+'/pywallet_partial_recovery_%d.json'%ts(), 'w')
-		f.write(json.dumps(r))
-		f.close()
-		print("\nRead %.1f Go in %.1f minutes\n"%(r['PRFsize']//1e9, r['PRFdt']//60.0))
+		recovered_chunks = {}
+		# iterator = search_patterns_on_disk(device, size, inc, nameToDBName.values())
+			# if repr(text) not in recovered_chunks:
+			# 	recovered_chunks[repr(text)] = []
+			# recovered_chunks[repr(text)].append(offset)
+		# partial_removery_file=open(outputdir+'/pywallet_partial_recovery_%d.json'%ts(), 'w')
+		# partial_removery_file.write(json.dumps(recovered_chunks))
+		# partial_removery_file.close()
+		print("\nRead %.1f Go in %.1f minutes\n"%(recovered_chunks['PRFsize']//1e9, recovered_chunks['PRFdt']//60.0))
 	else:
+		return
 		prf=device[20:]
-		f=open(prf, 'r')
-		content = f.read()
-		f.close()
-		r=json.loads(content)
-		device=r['PRFdevice']
-		print("\nLoaded %.1f Go from %s\n"%(r['PRFsize']//1e9, device))
-
-
-	try:
-		otype=os.O_RDONLY|os.O_BINARY
-	except:
-		otype=os.O_RDONLY
-	fd = os.open(device, otype)
-
+		partial_removery_file=open(prf, 'r')
+		content = partial_removery_file.read()
+		partial_removery_file.close()
+		recovered_chunks=json.loads(content)
+		device=recovered_chunks['PRFdevice']
+		print("\nLoaded %.1f Go from %s\n"%(recovered_chunks['PRFsize']//1e9, device))
 
 	mkeys=[]
 	crypters=[]
-	for offset in r[repr(nameToDBName['mkey'])]:
-		s=recov_mkey(fd, offset)
-		if s==None:
-			continue
-		if s[-1] == b'':s=s[:-1]
-		newmkey=RecovMkey(
-					s[1],
-					s[3],
-					int(binascii.hexlify(s[5][::-1]), 16),
-					int(binascii.hexlify(s[4][::-1]), 16),
-					int(binascii.hexlify(s[-1][::-1]), 16)
-				)
-		mkeys.append([offset,newmkey])
+	for recoverd_block in search_patterns_on_disk(device, size, inc, nameToDBName.values()):
 
-	print("Found %d possible wallets"%len(mkeys))
+		print("Found block")
+	# try:
+	# 	otype=os.O_RDONLY|os.O_BINARY
+	# except:
+	# 	otype=os.O_RDONLY
+	# fd = os.open(device, otype)
 
-
-
-
-	ckeys=[]
-	for offset in r[repr(nameToDBName['ckey'])]:
-		s=recov_ckey(fd, offset)
-		if s==None:
-			continue
-		newckey=RecovCkey(s[1], s[5][:int(binascii.hexlify(s[4]),16)])
-		ckeys.append([offset,newckey])
-	print('Found %d possible encrypted keys'%len(ckeys))
+		if recoverd_block.text==nameToDBName['mkey']:
+			for offset in recoverd_block.offsetlist:
+				mkey_recovery=recov_mkey(recoverd_block, offset)
+				if mkey_recovery==None:
+					continue
+				if mkey_recovery[-1] == b'':mkey_recovery=mkey_recovery[:-1]
+				newmkey=RecovMkey(
+							mkey_recovery[1],
+							mkey_recovery[3],
+							int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
+							int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
+							int(binascii.hexlify(mkey_recovery[-1][::-1]), 16)
+						)
+				mkeys.append([offset,newmkey])
 
 
-	uckeys=[]
-	for offset in r[repr(nameToDBName['key'])]:
-		s=recov_uckey(fd, offset)
-		if s:
-			uckeys.append(s[4])
-	uckeys = list(set(uckeys))
-	print('Found %d possible unencrypted keys'%len(uckeys))
 
 
-	os.close(fd)
+
+		ckeys=[]
+		for offset in recovered_chunks[repr(nameToDBName['ckey'])]:
+			ckey_removery=recov_ckey(fd, offset)
+			if ckey_removery==None:
+				continue
+			newckey=RecovCkey(ckey_removery[1], ckey_removery[5][:int(binascii.hexlify(ckey_removery[4]),16)])
+			ckeys.append([offset,newckey])
+		print('Found %d possible encrypted keys'%len(ckeys))
 
 
-	list_of_possible_keys_per_master_key=dict(map(lambda x:[x[1],[]], mkeys))
-	for cko,ck in ckeys:
-		tl=map(lambda x:[abs(x[0]-cko)]+x, mkeys)
-		tl=sorted(tl, key=lambda x:x[0])
-		list_of_possible_keys_per_master_key[tl[0][2]].append(ck)
-
-	cpt=0
-	mki=1
-	tzero=time.time()
-	if len(passes)==0:
-		if len(ckeys)>0:
-			print("Can't decrypt them as you didn't provide any passphrase.")
-	else:
-		for mko,mk in mkeys:
-			list_of_possible_keys=list_of_possible_keys_per_master_key[mk]
-			sys.stdout.write( "\nPossible wallet #"+str(mki))
-			sys.stdout.flush()
-			for ppi,pp in enumerate(passes):
-				sys.stdout.write( "\n    with passphrase #"+str(ppi+1)+"  ")
-				sys.stdout.flush()
-				failures_in_a_row=0
-#				print("SKFP params:", pp, mk.salt, mk.iterations, mk.method)
-				res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
-				if res == 0:
-					print("Unsupported derivation method")
-					sys.exit(1)
-				masterkey = crypter.Decrypt(mk.encrypted_key)
-				crypter.SetKey(masterkey)
-				for ck in list_of_possible_keys:
-					if cpt%10==9 and failures_in_a_row==0:
-						sys.stdout.write('.')
-						sys.stdout.flush()
-					if failures_in_a_row>5:
-						break
-					crypter.SetIV(Hash(ck.public_key))
-					secret = crypter.Decrypt(ck.encrypted_pk)
-					compressed = ck.public_key[0] != '\04'
+		uckeys=[]
+		for offset in recovered_chunks[repr(nameToDBName['key'])]:
+			ukey_removery=recov_uckey(fd, offset)
+			if ukey_removery:
+				uckeys.append(ukey_removery[4])
+		uckeys = list(set(uckeys))
+		print('Found %d possible unencrypted keys'%len(uckeys))
 
 
-					pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
-					if ck.public_key != GetPubKey(pkey, compressed):
-						failures_in_a_row+=1
-					else:
-						failures_in_a_row=0
-						ck.mkey=mk
-						ck.privkey=secret
-					cpt+=1
-			mki+=1
-		print("\n")
-		tone=time.time()
-		try:
-			calcspeed=1.0*cpt//(tone-tzero)*60  #calc/min
-		except:
-			calcspeed=1.0
-		if calcspeed==0:
-			calcspeed=1.0
+		os.close(fd)
 
-		ckeys_not_decrypted=list(filter(lambda x:x[1].privkey==None, ckeys))
-		refused_to_test_all_pps=True
-		if len(ckeys_not_decrypted)==0:
-			print("All the found encrypted private keys have been decrypted.")
-			return map(lambda x:x[1].privkey, ckeys)
+
+		list_of_possible_keys_per_master_key=dict(map(lambda x:[x[1],[]], mkeys))
+		for cko,ck in ckeys:
+			tl=map(lambda x:[abs(x[0]-cko)]+x, mkeys)
+			tl=sorted(tl, key=lambda x:x[0])
+			list_of_possible_keys_per_master_key[tl[0][2]].append(ck)
+
+		cpt=0
+		mki=1
+		tzero=time.time()
+		if len(passes)==0:
+			if len(ckeys)>0:
+				print("Can't decrypt them as you didn't provide any passphrase.")
 		else:
-			print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
-			print("Trying all the remaining possibilities (%d) might take up to %d minutes."%(len(ckeys_not_decrypted)*len(passes)*len(mkeys),int(len(ckeys_not_decrypted)*len(passes)*len(mkeys)//calcspeed)))
-			cont=raw_input("Do you want to test them? (y/n): ")
-			while len(cont)==0:
+			for mko,mk in mkeys:
+				list_of_possible_keys=list_of_possible_keys_per_master_key[mk]
+				sys.stdout.write( "\nPossible wallet #"+str(mki))
+				sys.stdout.flush()
+				for ppi,pp in enumerate(passes):
+					sys.stdout.write( "\n    with passphrase #"+str(ppi+1)+"  ")
+					sys.stdout.flush()
+					failures_in_a_row=0
+	#				print("SKFP params:", pp, mk.salt, mk.iterations, mk.method)
+					res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
+					if res == 0:
+						print("Unsupported derivation method")
+						sys.exit(1)
+					masterkey = crypter.Decrypt(mk.encrypted_key)
+					crypter.SetKey(masterkey)
+					for ck in list_of_possible_keys:
+						if cpt%10==9 and failures_in_a_row==0:
+							sys.stdout.write('.')
+							sys.stdout.flush()
+						if failures_in_a_row>5:
+							break
+						crypter.SetIV(Hash(ck.public_key))
+						secret = crypter.Decrypt(ck.encrypted_pk)
+						compressed = ck.public_key[0] != '\04'
+
+
+						pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
+						if ck.public_key != GetPubKey(pkey, compressed):
+							failures_in_a_row+=1
+						else:
+							failures_in_a_row=0
+							ck.mkey=mk
+							ck.privkey=secret
+						cpt+=1
+				mki+=1
+			print("\n")
+			tone=time.time()
+			try:
+				calcspeed=1.0*cpt//(tone-tzero)*60  #calc/min
+			except:
+				calcspeed=1.0
+			if calcspeed==0:
+				calcspeed=1.0
+
+			ckeys_not_decrypted=list(filter(lambda x:x[1].privkey==None, ckeys))
+			refused_to_test_all_pps=True
+			if len(ckeys_not_decrypted)==0:
+				print("All the found encrypted private keys have been decrypted.")
+				return map(lambda x:x[1].privkey, ckeys)
+			else:
+				print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
+				print("Trying all the remaining possibilities (%d) might take up to %d minutes."%(len(ckeys_not_decrypted)*len(passes)*len(mkeys),int(len(ckeys_not_decrypted)*len(passes)*len(mkeys)//calcspeed)))
 				cont=raw_input("Do you want to test them? (y/n): ")
-				if cont[0]=='y':
-					refused_to_test_all_pps=False
-					cpt=0
-					for dist,mko,mk in tl:
-						for ppi,pp in enumerate(passes):
-							res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
-							if res == 0:
-								logging.error("Unsupported derivation method")
-								sys.exit(1)
-							masterkey = crypter.Decrypt(mk.encrypted_key)
-							crypter.SetKey(masterkey)
-							for cko,ck in ckeys_not_decrypted:
-								tl=map(lambda x:[abs(x[0]-cko)]+x, mkeys)
-								tl=sorted(tl, key=lambda x:x[0])
-								if mk==tl[0][2]:
-									continue         #because already tested
-								crypter.SetIV(Hash(ck.public_key))
-								secret = crypter.Decrypt(ck.encrypted_pk)
-								compressed = ck.public_key[0] != '\04'
+				while len(cont)==0:
+					cont=raw_input("Do you want to test them? (y/n): ")
+					if cont[0]=='y':
+						refused_to_test_all_pps=False
+						cpt=0
+						for dist,mko,mk in tl:
+							for ppi,pp in enumerate(passes):
+								res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
+								if res == 0:
+									logging.error("Unsupported derivation method")
+									sys.exit(1)
+								masterkey = crypter.Decrypt(mk.encrypted_key)
+								crypter.SetKey(masterkey)
+								for cko,ck in ckeys_not_decrypted:
+									tl=map(lambda x:[abs(x[0]-cko)]+x, mkeys)
+									tl=sorted(tl, key=lambda x:x[0])
+									if mk==tl[0][2]:
+										continue         #because already tested
+									crypter.SetIV(Hash(ck.public_key))
+									secret = crypter.Decrypt(ck.encrypted_pk)
+									compressed = ck.public_key[0] != '\04'
 
 
-								pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
-								if ck.public_key == GetPubKey(pkey, compressed):
-									ck.mkey=mk
-									ck.privkey=secret
-								cpt+=1
+									pkey = EC_KEY(int(b'0x' + binascii.hexlify(secret), 16))
+									if ck.public_key == GetPubKey(pkey, compressed):
+										ck.mkey=mk
+										ck.privkey=secret
+									cpt+=1
 
-		print("")
-		ckeys_not_decrypted=filter(lambda x:x[1].privkey==None, ckeys)
-		if len(ckeys_not_decrypted)==0:
-			print("All the found encrypted private keys have been finally decrypted.")
-		elif not refused_to_test_all_pps:
-			print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
-			print("Try another password, check the size of your partition or seek help")
+			print("")
+			ckeys_not_decrypted=filter(lambda x:x[1].privkey==None, ckeys)
+			if len(ckeys_not_decrypted)==0:
+				print("All the found encrypted private keys have been finally decrypted.")
+			elif not refused_to_test_all_pps:
+				print("Private keys not decrypted: %d"%len(ckeys_not_decrypted))
+				print("Try another password, check the size of your partition or seek help")
 
 
 	uncrypted_ckeys=filter(lambda x:x!=None, map(lambda x:x[1].privkey, ckeys))
@@ -3295,25 +3306,25 @@ class tx():
 		r.outs=self.outs[:]
 		return r
 
-	def sign(n=-1):
-		if n==-1:
+	def sign(index=-1):
+		if index==-1:
 			for i in range(len(ins)):
 				self.sign(i)
 				return "done"
 
 		global json_db
 		txcopy=self.copy()
-		txcopy.hashtypeone(i, self.ins[n]['oldscript'])
+		txcopy.hashtypeone(i, self.ins[index]['oldscript'])
 
 		sec=''
 		for k in json_db['keys']:
-			if k['addr']==self.ins[n]['addr'] and 'hexsec' in k:
+			if k['addr']==self.ins[index]['addr'] and 'hexsec' in k:
 				sec=k['hexsec']
 		if sec=='':
-			print("priv key not found (addr:"+self.ins[n]['addr']+")")
+			print("priv key not found (addr:"+self.ins[index]['addr']+")")
 			return ""
 
-		self.ins[n]['sig']=sign_message(binascii.unhexlify(sec), txcopy.get_tx(), True)
+		self.ins[index]['sig']=sign_message(binascii.unhexlify(sec), txcopy.get_tx(), True)
 
 	def ser():
 		r=Bdict({})
