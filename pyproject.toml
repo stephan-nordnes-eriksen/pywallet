@@ -9,3 +9,25 @@ dependencies = [
     "pytype>=2024.10.11",
     "ruff>=0.11.2",
 ]
+[tool.ruff]
+# Enable pycodestyle, Pyflakes, and import sorting
+select = ["E", "F", "I"]
+# Line length to match black's default
+line-length = 100
+# Target Python version
+target-version = "py312"
+# Exclude files/directories
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.isort]
+known-first-party = ["pywallet"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
