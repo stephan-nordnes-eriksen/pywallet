@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from __future__ import print_function
-from typing import Generator
+
+from typing import Generator, Optional
 
 pywversion = "2.2"
 never_update = False
@@ -2591,58 +2592,73 @@ def overlapped_read(f, sz, overlap, maxlen=None):
 
 
 class BlockResults(object):
-    def __init__(self, block, text, offset, offsetlint):
+    def __init__(
+        self,
+        block: bytes,
+        pattern_bytes: bytes,
+        disk_offset: int,
+        offsetlint: list[int],
+    ):
         self.block = block
-        self.text = text
-        self.offset = offset
+        self.pattern_bytes = pattern_bytes
+        self.disk_offset = disk_offset
         self.offsetlist = offsetlint
 
 
 def search_patterns_on_disk(
-    device: str, size: int, inc: int, patternlist: list[bytes]
+    device: str,
+    size: int,
+    inc: int,
+    patternlist: list[bytes],
 ) -> Generator[BlockResults, None, None]:
     # inc must be higher than 1k
+    print("Searching for patterns on disk, device %s, size %d" % (device, size))
     try:
         otype = os.O_RDONLY | os.O_BINARY
     except:
         otype = os.O_RDONLY
     try:
-        fd = os.open(device, otype)
+        file_device = os.open(device, otype)
     except Exception as e:
         print("Can't open %s, check the path or try as root" % device)
         print("  Error: " + str(e.args))
         exit(0)
 
-    i = 0
-    data = b""
+    try:
+        bytes_read = 0
+        data = b""
 
-    # tzero=time.time()
-    sizetokeep = 0
-    lendataloaded = None
-    writeProgressEvery = 100 * Mo
-    while i < int(size) and (lendataloaded != 0 or lendataloaded == None):
-        if int(i // writeProgressEvery) != int((i + inc) // writeProgressEvery):
-            print("%.2f Go read" % (i // 1e9))
-        try:
-            datakept = data[-sizetokeep:]
-            data = datakept + os.read(fd, inc)
-            lendataloaded = len(data) - len(datakept)  # should be inc
-            for text in patternlist:
-                if text in data:
-                    offset = i - len(datakept)
-                    offsetslist = [offset + m.start() for m in re.finditer(text, data)]
-                    yield BlockResults(data, text, offset, offsetslist)
-                    pass
-            sizetokeep = 20  # 20 because all the patterns have a len<20. Could be higher.
-            i += lendataloaded
-        except Exception as exc:
-            if lendataloaded % 512 > 0:
-                raise Exception("SPOD error 1: %d, %d" % (lendataloaded, i - len(datakept)))
-            os.lseek(fd, lendataloaded, os.SEEK_CUR)
-            print(str(exc))
-            i += lendataloaded
-            continue
-    os.close(fd)
+        # tzero=time.time()
+        sizetokeep = 0
+        lendataloaded = None
+        writeProgressEvery = 100 * Mo
+        while bytes_read < int(size) and (lendataloaded != 0 or lendataloaded is None):
+            if int(bytes_read // writeProgressEvery) != int((bytes_read + inc) // writeProgressEvery):
+                print("%.2f Go read" % (bytes_read // 1e9))
+            try:
+                datakept = data[-sizetokeep:]
+                data = datakept + os.read(file_device, inc)
+                lendataloaded = len(data) - len(datakept)  # should be inc
+                for pattern_bytes in patternlist:
+                    if pattern_bytes in data:
+                        offset_on_disk = bytes_read - len(datakept)
+                        offsetslist = [m.start() for m in re.finditer(pattern_bytes, data)]
+                        # offsetslist = [offset + m.start() for m in re.finditer(text, data)]
+                        yield BlockResults(data, pattern_bytes, offset_on_disk, offsetslist)
+                        pass
+                sizetokeep = 20  # 20 because all the patterns have a len<20. Could be higher.
+                bytes_read += lendataloaded
+            except Exception as exc:
+                if lendataloaded is None:
+                    raise Exception("SPOD error is None")
+                if lendataloaded % 512 > 0:
+                    raise Exception("SPOD error 1: %d, %d" % (lendataloaded, bytes_read - len(datakept)))
+                os.lseek(file_device, lendataloaded, os.SEEK_CUR)
+                print(str(exc))
+                bytes_read += lendataloaded
+                continue
+    finally:
+        os.close(file_device)
 
     # AllOffsets=dict()
     # AllOffsets['PRFdevice']=device
@@ -2651,15 +2667,18 @@ def search_patterns_on_disk(
     # return AllOffsets
 
 
-def multiextract(s, ll):
-    r = []
+def multiextract(
+        byte_sequence: bytes,
+        lengths_list: list[int],
+) -> list[bytes]:
+    extracted_segments: list[bytes] = []
     cursor = 0
-    for length in ll:
-        r.append(s[cursor : cursor + length])
+    for length in lengths_list:
+        extracted_segments.append(byte_sequence[cursor : cursor + length])
         cursor += length
-    if s[cursor:] != b"":
-        r.append(s[cursor:])
-    return r
+    if byte_sequence[cursor:] != b"":
+        extracted_segments.append(byte_sequence[cursor:])
+    return extracted_segments
 
 
 class RecovCkey(object):
@@ -2680,57 +2699,28 @@ class RecovMkey(object):
         # print((ekey, salt, nditer, ndmethod, nid))
 
 
-def readpartfile(fd, offset, length):  # make everything 512*n because of windows...
+def read_part_of_bytes(bytes, offset, length):
+    return bytes[offset : offset + length]
+
+def readpartfile(
+    file_descriptor: int,
+    offset: int,
+    length: int,
+) -> bytes:
+    # make everything 512*n because of windows...
     rest = offset % 512
     new_offset = offset - rest
     big_length = 512 * (int((length + rest - 1) // 512) + 1)
-    os.lseek(fd, new_offset, os.SEEK_SET)
-    disk_part = os.read(fd, big_length)
+    os.lseek(file_descriptor, new_offset, os.SEEK_SET)
+    disk_part = os.read(file_descriptor, big_length)
     return disk_part[rest : rest + length]
 
-    def recov_ckey(fd: int, offset: int) -> Optional[List[bytes]]:
-        disk_part = readpartfile(fd, offset - 49, 122)
-        me = multiextract(disk_part, [1, 48, 4, 4, 1])
 
-        checks = []
-        checks.append([0, "30"])
-        checks.append([3, "636b6579"])
-        if sum(
-            map(lambda x: int(me[x[0]] != binascii.unhexlify(x[1])), checks)
-        ):  # number of false statements
-            return None
-
-        return me
-
-    def recov_mkey(fd: int, offset: int) -> Optional[List[bytes]]:
-        disk_part = readpartfile(fd, offset - 72, 84)
-        me = multiextract(disk_part, [4, 48, 1, 8, 4, 4, 1, 2, 8, 4])
-
-        checks = []
-        checks.append([0, "43000130"])
-        checks.append([2, "08"])
-        checks.append([6, "00"])
-        checks.append([8, "090001046d6b6579"])
-        if sum(
-            map(lambda x: int(me[x[0]] != binascii.unhexlify(x[1])), checks)
-        ):  # number of false statements
-            return None
-
-        return me
-
-    def recov_uckey(
-        fd: int, offset: int
-    ) -> Union[List[bytes], Tuple[None, None, None, None, bytes]]:
-        dd = readpartfile(fd, offset, 223)
-        r = []
-        for beg in map(binascii.unhexlify, ["3081d30201010420", "308201130201010420"]):
-            for chunk in drop_first(dd.split(beg)):
-                r.append(chunk[:32])
-        return r and (None, None, None, None, r[0])
-
-
-def recov_ckey(fd, offset):
-    disk_part = readpartfile(fd, offset - 49, 122)
+def recov_ckey(
+    file_descriptor: int,
+    offset: int,
+) -> Optional[list[bytes]]:
+    disk_part = readpartfile(file_descriptor, offset - 49, 122)
     me = multiextract(disk_part, [1, 48, 4, 4, 1])
 
     checks = []
@@ -2744,21 +2734,38 @@ def recov_ckey(fd, offset):
     return me
 
 
-def recov_mkey(fd, offset):
-    disk_part = readpartfile(fd, offset - 72, 84)
-    me = multiextract(disk_part, [4, 48, 1, 8, 4, 4, 1, 2, 8, 4])
+def recov_mkey(
+        recoverd_block: BlockResults,
+    ) -> list[list[int, RecovMkey]]:
+    mkeys = []
+    bytes_part = recoverd_block.block
+    for offset in recoverd_block.offsetlist:
+        disk_part = read_part_of_bytes(bytes_part, offset - 72, 84)
+        mkey_recovery = multiextract(disk_part, [4, 48, 1, 8, 4, 4, 1, 2, 8, 4])
 
-    checks = []
-    checks.append([0, "43000130"])
-    checks.append([2, "08"])
-    checks.append([6, "00"])
-    checks.append([8, "090001046d6b6579"])
-    if sum(
-        map(lambda x: int(me[x[0]] != binascii.unhexlify(x[1])), checks)
-    ):  # number of false statements
-        return None
+        checks = []
+        checks.append([0, "43000130"])
+        checks.append([2, "08"])
+        checks.append([6, "00"])
+        checks.append([8, "090001046d6b6579"])
+        if sum(
+            map(lambda x: int(mkey_recovery[x[0]] != binascii.unhexlify(x[1])), checks)
+        ):  # number of false statements
+            continue
 
-    return me
+        if mkey_recovery is None:
+            continue
+        if mkey_recovery[-1] == b"":
+            mkey_recovery = mkey_recovery[:-1]
+        newmkey = RecovMkey(
+            mkey_recovery[1],
+            mkey_recovery[3],
+            int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
+            int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
+            int(binascii.hexlify(mkey_recovery[-1][::-1]), 16),
+        )
+        mkeys.append([offset, newmkey])
+    return mkeys
 
 
 def drop_first(e):
@@ -2826,10 +2833,10 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
         # partial_removery_file=open(outputdir+'/pywallet_partial_recovery_%d.json'%ts(), 'w')
         # partial_removery_file.write(json.dumps(recovered_chunks))
         # partial_removery_file.close()
-        print(
-            "\nRead %.1f Go in %.1f minutes\n"
-            % (recovered_chunks["PRFsize"] // 1e9, recovered_chunks["PRFdt"] // 60.0)
-        )
+        # print(
+        #     "\nRead %.1f Go in %.1f minutes\n"
+        #     % (recovered_chunks["PRFsize"] // 1e9, recovered_chunks["PRFdt"] // 60.0)
+        # )
     else:
         return
         prf = device[20:]
@@ -2841,7 +2848,6 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
         print("\nLoaded %.1f Go from %s\n" % (recovered_chunks["PRFsize"] // 1e9, device))
 
     mkeys = []
-    crypters = []
     for recoverd_block in search_patterns_on_disk(device, size, inc, nameToDBName.values()):
         print("Found block")
         # try:
@@ -2850,21 +2856,22 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
         #     otype=os.O_RDONLY
         # fd = os.open(device, otype)
 
-        if recoverd_block.text == nameToDBName["mkey"]:
-            for offset in recoverd_block.offsetlist:
-                mkey_recovery = recov_mkey(recoverd_block, offset)
-                if mkey_recovery == None:
-                    continue
-                if mkey_recovery[-1] == b"":
-                    mkey_recovery = mkey_recovery[:-1]
-                newmkey = RecovMkey(
-                    mkey_recovery[1],
-                    mkey_recovery[3],
-                    int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
-                    int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
-                    int(binascii.hexlify(mkey_recovery[-1][::-1]), 16),
-                )
-                mkeys.append([offset, newmkey])
+        if recoverd_block.pattern_bytes == nameToDBName["mkey"]:
+            new_mkeys = recov_mkey(recoverd_block)
+            mkeys.extend(new_mkeys)
+            # for offset in recoverd_block.offsetlist:
+            #     if mkey_recovery == None:
+            #         continue
+            #     if mkey_recovery[-1] == b"":
+            #         mkey_recovery = mkey_recovery[:-1]
+            #     newmkey = RecovMkey(
+            #         mkey_recovery[1],
+            #         mkey_recovery[3],
+            #         int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
+            #         int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
+            #         int(binascii.hexlify(mkey_recovery[-1][::-1]), 16),
+            #     )
+            #     mkeys.append([offset, newmkey])
 
         ckeys = []
         for offset in recovered_chunks[repr(nameToDBName["ckey"])]:

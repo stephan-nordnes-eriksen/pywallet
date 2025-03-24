@@ -34,6 +34,12 @@ wheels = [
 ]
 
 [[package]]
+name = "bsddb3"
+version = "6.2.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/24/92034482656945fc6ceb10551222b43a0ff8d0c87e15839120487820067e/bsddb3-6.2.9.tar.gz", hash = "sha256:70d05ec8dc568f42e70fc919a442e0daadc2a905a1cfb7ca77f549d49d6e7801", size = 230475 }
+
+[[package]]
 name = "immutabledict"
 version = "4.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -268,6 +274,7 @@ name = "pywallet"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "bsddb3" },
     { name = "infer-types" },
     { name = "pytype" },
     { name = "ruff" },
@@ -275,6 +282,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bsddb3", specifier = ">=6.2.9" },
     { name = "infer-types", specifier = ">=1.0.0" },
     { name = "pytype", specifier = ">=2024.10.11" },
     { name = "ruff", specifier = ">=0.11.2" },
