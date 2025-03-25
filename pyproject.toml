@@ -7,6 +7,7 @@ requires-python = ">=3.12.3"
 dependencies = [
     "bsddb3>=6.2.9",
     "infer-types>=1.0.0",
+    "pycryptodome>=3.22.0",
     "pytype>=2024.10.11",
     "ruff>=0.11.2",
 ]

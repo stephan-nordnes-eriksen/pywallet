@@ -2717,10 +2717,11 @@ def readpartfile(
 
 
 def recov_ckey(
-    file_descriptor: int,
+    block: bytes,
     offset: int,
 ) -> Optional[list[bytes]]:
-    disk_part = readpartfile(file_descriptor, offset - 49, 122)
+    # disk_part = readpartfile(file_descriptor, offset - 49, 122)
+    disk_part = read_part_of_bytes(block, offset - 49, 122)
     me = multiextract(disk_part, [1, 48, 4, 4, 1])
 
     checks = []
@@ -2777,8 +2778,12 @@ def drop_first(e):
         yield i
 
 
-def recov_uckey(fd, offset):
-    dd = readpartfile(fd, offset, 223)
+def recov_uckey(
+    block: bytes,
+    offset: int,
+):
+    # dd = readpartfile(fd, offset, 223)
+    dd = read_part_of_bytes(block, offset, 223)
     r = []
     for beg in map(binascii.unhexlify, ["3081d30201010420", "308201130201010420"]):
         for chunk in drop_first(dd.split(beg)):
@@ -2848,6 +2853,8 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
         print("\nLoaded %.1f Go from %s\n" % (recovered_chunks["PRFsize"] // 1e9, device))
 
     mkeys = []
+    ckeys = []
+    uckeys = []
     for recoverd_block in search_patterns_on_disk(device, size, inc, nameToDBName.values()):
         print("Found block")
         # try:
@@ -2873,135 +2880,137 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
             #     )
             #     mkeys.append([offset, newmkey])
 
-        ckeys = []
-        for offset in recovered_chunks[repr(nameToDBName["ckey"])]:
-            ckey_removery = recov_ckey(fd, offset)
-            if ckey_removery == None:
-                continue
-            newckey = RecovCkey(
-                ckey_removery[1], ckey_removery[5][: int(binascii.hexlify(ckey_removery[4]), 16)]
-            )
-            ckeys.append([offset, newckey])
-        print("Found %d possible encrypted keys" % len(ckeys))
-
-        uckeys = []
-        for offset in recovered_chunks[repr(nameToDBName["key"])]:
-            ukey_removery = recov_uckey(fd, offset)
-            if ukey_removery:
-                uckeys.append(ukey_removery[4])
-        uckeys = list(set(uckeys))
-        print("Found %d possible unencrypted keys" % len(uckeys))
-
-        os.close(fd)
-
-        list_of_possible_keys_per_master_key = dict(map(lambda x: [x[1], []], mkeys))
-        for cko, ck in ckeys:
-            tl = map(lambda x: [abs(x[0] - cko)] + x, mkeys)
-            tl = sorted(tl, key=lambda x: x[0])
-            list_of_possible_keys_per_master_key[tl[0][2]].append(ck)
-
-        cpt = 0
-        mki = 1
-        tzero = time.time()
-        if len(passes) == 0:
-            if len(ckeys) > 0:
-                print("Can't decrypt them as you didn't provide any passphrase.")
-        else:
-            for mko, mk in mkeys:
-                list_of_possible_keys = list_of_possible_keys_per_master_key[mk]
-                sys.stdout.write("\nPossible wallet #" + str(mki))
-                sys.stdout.flush()
-                for ppi, pp in enumerate(passes):
-                    sys.stdout.write("\n    with passphrase #" + str(ppi + 1) + "  ")
-                    sys.stdout.flush()
-                    failures_in_a_row = 0
-                    #                print("SKFP params:", pp, mk.salt, mk.iterations, mk.method)
-                    res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
-                    if res == 0:
-                        print("Unsupported derivation method")
-                        sys.exit(1)
-                    masterkey = crypter.Decrypt(mk.encrypted_key)
-                    crypter.SetKey(masterkey)
-                    for ck in list_of_possible_keys:
-                        if cpt % 10 == 9 and failures_in_a_row == 0:
-                            sys.stdout.write(".")
-                            sys.stdout.flush()
-                        if failures_in_a_row > 5:
-                            break
-                        crypter.SetIV(Hash(ck.public_key))
-                        secret = crypter.Decrypt(ck.encrypted_pk)
-                        compressed = ck.public_key[0] != "\04"
-
-                        pkey = EC_KEY(int(b"0x" + binascii.hexlify(secret), 16))
-                        if ck.public_key != GetPubKey(pkey, compressed):
-                            failures_in_a_row += 1
-                        else:
-                            failures_in_a_row = 0
-                            ck.mkey = mk
-                            ck.privkey = secret
-                        cpt += 1
-                mki += 1
-            print("\n")
-            tone = time.time()
-            try:
-                calcspeed = 1.0 * cpt // (tone - tzero) * 60  # calc/min
-            except:
-                calcspeed = 1.0
-            if calcspeed == 0:
-                calcspeed = 1.0
-
-            ckeys_not_decrypted = list(filter(lambda x: x[1].privkey == None, ckeys))
-            refused_to_test_all_pps = True
-            if len(ckeys_not_decrypted) == 0:
-                print("All the found encrypted private keys have been decrypted.")
-                return map(lambda x: x[1].privkey, ckeys)
-            else:
-                print("Private keys not decrypted: %d" % len(ckeys_not_decrypted))
-                print(
-                    "Trying all the remaining possibilities (%d) might take up to %d minutes."
-                    % (
-                        len(ckeys_not_decrypted) * len(passes) * len(mkeys),
-                        int(len(ckeys_not_decrypted) * len(passes) * len(mkeys) // calcspeed),
-                    )
+        # for offset in recovered_chunks[repr(nameToDBName["ckey"])]:
+        if recoverd_block.pattern_bytes == nameToDBName["ckey"]:
+            for offset in recoverd_block.offsetlist:
+                ckey_removery = recov_ckey(recoverd_block.block, offset)
+                if ckey_removery is None:
+                    continue
+                newckey = RecovCkey(
+                    ckey_removery[1], ckey_removery[5][: int(binascii.hexlify(ckey_removery[4]), 16)]
                 )
+                ckeys.append([offset, newckey])
+            print("Found %d possible encrypted keys" % len(ckeys))
+
+        if recoverd_block.pattern_bytes == nameToDBName["key"]:
+            #for offset in recovered_chunks[repr(nameToDBName["key"])]:
+            for offset in recoverd_block.offsetlist:
+                ukey_removery = recov_uckey(recoverd_block.block, offset)
+                if ukey_removery:
+                    uckeys.append(ukey_removery[4])
+            uckeys = list(set(uckeys))
+            print("Found %d possible unencrypted keys" % len(uckeys))
+
+
+
+    list_of_possible_keys_per_master_key = dict(map(lambda x: [x[1], []], mkeys))
+    for cko, ck in ckeys:
+        tl = map(lambda x: [abs(x[0] - cko)] + x, mkeys)
+        tl = sorted(tl, key=lambda x: x[0])
+        list_of_possible_keys_per_master_key[tl[0][2]].append(ck)
+
+    cpt = 0
+    mki = 1
+    tzero = time.time()
+    if len(passes) == 0:
+        if len(ckeys) > 0:
+            print("Can't decrypt them as you didn't provide any passphrase.")
+    else:
+        for mko, mk in mkeys:
+            list_of_possible_keys = list_of_possible_keys_per_master_key[mk]
+            sys.stdout.write("\nPossible wallet #" + str(mki))
+            sys.stdout.flush()
+            for ppi, pp in enumerate(passes):
+                sys.stdout.write("\n    with passphrase #" + str(ppi + 1) + "  ")
+                sys.stdout.flush()
+                failures_in_a_row = 0
+                #                print("SKFP params:", pp, mk.salt, mk.iterations, mk.method)
+                res = crypter.SetKeyFromPassphrase(pp, mk.salt, mk.iterations, mk.method)
+                if res == 0:
+                    print("Unsupported derivation method")
+                    sys.exit(1)
+                masterkey = crypter.Decrypt(mk.encrypted_key)
+                crypter.SetKey(masterkey)
+                for ck in list_of_possible_keys:
+                    if cpt % 10 == 9 and failures_in_a_row == 0:
+                        sys.stdout.write(".")
+                        sys.stdout.flush()
+                    if failures_in_a_row > 5:
+                        break
+                    crypter.SetIV(Hash(ck.public_key))
+                    secret = crypter.Decrypt(ck.encrypted_pk)
+                    compressed = ck.public_key[0] != "\04"
+
+                    pkey = EC_KEY(int(b"0x" + binascii.hexlify(secret), 16))
+                    if ck.public_key != GetPubKey(pkey, compressed):
+                        failures_in_a_row += 1
+                    else:
+                        failures_in_a_row = 0
+                        ck.mkey = mk
+                        ck.privkey = secret
+                    cpt += 1
+            mki += 1
+        print("\n")
+        tone = time.time()
+        try:
+            calcspeed = 1.0 * cpt // (tone - tzero) * 60  # calc/min
+        except:
+            calcspeed = 1.0
+        if calcspeed == 0:
+            calcspeed = 1.0
+
+        ckeys_not_decrypted = list(filter(lambda x: x[1].privkey == None, ckeys))
+        refused_to_test_all_pps = True
+        if len(ckeys_not_decrypted) == 0:
+            print("All the found encrypted private keys have been decrypted.")
+            return map(lambda x: x[1].privkey, ckeys)
+        else:
+            print("Private keys not decrypted: %d" % len(ckeys_not_decrypted))
+            print(
+                "Trying all the remaining possibilities (%d) might take up to %d minutes."
+                % (
+                    len(ckeys_not_decrypted) * len(passes) * len(mkeys),
+                    int(len(ckeys_not_decrypted) * len(passes) * len(mkeys) // calcspeed),
+                )
+            )
+            cont = raw_input("Do you want to test them? (y/n): ")
+            while len(cont) == 0:
                 cont = raw_input("Do you want to test them? (y/n): ")
-                while len(cont) == 0:
-                    cont = raw_input("Do you want to test them? (y/n): ")
-                    if cont[0] == "y":
-                        refused_to_test_all_pps = False
-                        cpt = 0
-                        for dist, mko, mk in tl:
-                            for ppi, pp in enumerate(passes):
-                                res = crypter.SetKeyFromPassphrase(
-                                    pp, mk.salt, mk.iterations, mk.method
-                                )
-                                if res == 0:
-                                    logging.error("Unsupported derivation method")
-                                    sys.exit(1)
-                                masterkey = crypter.Decrypt(mk.encrypted_key)
-                                crypter.SetKey(masterkey)
-                                for cko, ck in ckeys_not_decrypted:
-                                    tl = map(lambda x: [abs(x[0] - cko)] + x, mkeys)
-                                    tl = sorted(tl, key=lambda x: x[0])
-                                    if mk == tl[0][2]:
-                                        continue  # because already tested
-                                    crypter.SetIV(Hash(ck.public_key))
-                                    secret = crypter.Decrypt(ck.encrypted_pk)
-                                    compressed = ck.public_key[0] != "\04"
+                if cont[0] == "y":
+                    refused_to_test_all_pps = False
+                    cpt = 0
+                    for dist, mko, mk in tl:
+                        for ppi, pp in enumerate(passes):
+                            res = crypter.SetKeyFromPassphrase(
+                                pp, mk.salt, mk.iterations, mk.method
+                            )
+                            if res == 0:
+                                logging.error("Unsupported derivation method")
+                                sys.exit(1)
+                            masterkey = crypter.Decrypt(mk.encrypted_key)
+                            crypter.SetKey(masterkey)
+                            for cko, ck in ckeys_not_decrypted:
+                                tl = map(lambda x: [abs(x[0] - cko)] + x, mkeys)
+                                tl = sorted(tl, key=lambda x: x[0])
+                                if mk == tl[0][2]:
+                                    continue  # because already tested
+                                crypter.SetIV(Hash(ck.public_key))
+                                secret = crypter.Decrypt(ck.encrypted_pk)
+                                compressed = ck.public_key[0] != "\04"
 
-                                    pkey = EC_KEY(int(b"0x" + binascii.hexlify(secret), 16))
-                                    if ck.public_key == GetPubKey(pkey, compressed):
-                                        ck.mkey = mk
-                                        ck.privkey = secret
-                                    cpt += 1
+                                pkey = EC_KEY(int(b"0x" + binascii.hexlify(secret), 16))
+                                if ck.public_key == GetPubKey(pkey, compressed):
+                                    ck.mkey = mk
+                                    ck.privkey = secret
+                                cpt += 1
 
-            print("")
-            ckeys_not_decrypted = filter(lambda x: x[1].privkey == None, ckeys)
-            if len(ckeys_not_decrypted) == 0:
-                print("All the found encrypted private keys have been finally decrypted.")
-            elif not refused_to_test_all_pps:
-                print("Private keys not decrypted: %d" % len(ckeys_not_decrypted))
-                print("Try another password, check the size of your partition or seek help")
+        print("")
+        ckeys_not_decrypted = filter(lambda x: x[1].privkey == None, ckeys)
+        if len(ckeys_not_decrypted) == 0:
+            print("All the found encrypted private keys have been finally decrypted.")
+        elif not refused_to_test_all_pps:
+            print("Private keys not decrypted: %d" % len(ckeys_not_decrypted))
+            print("Try another password, check the size of your partition or seek help")
 
     uncrypted_ckeys = filter(lambda x: x != None, map(lambda x: x[1].privkey, ckeys))
     uckeys.extend(uncrypted_ckeys)
