@@ -2631,7 +2631,7 @@ def search_patterns_on_disk(
         # tzero=time.time()
         sizetokeep = 0
         lendataloaded = None
-        writeProgressEvery = 100 * Mo
+        writeProgressEvery = 1000 * Mo
         while bytes_read < int(size) and (lendataloaded != 0 or lendataloaded is None):
             if int(bytes_read // writeProgressEvery) != int((bytes_read + inc) // writeProgressEvery):
                 print("%.2f Go read" % (bytes_read // 1e9))
@@ -2768,6 +2768,25 @@ def recov_mkey(
         mkeys.append([offset, newmkey])
     return mkeys
 
+def process_ckeys(recoverd_block: BlockResults):
+    ckeys = []
+    for offset in recoverd_block.offsetlist:
+        ckey_removery = recov_ckey(recoverd_block.block, offset)
+        if ckey_removery is None:
+            continue
+        newckey = RecovCkey(
+            ckey_removery[1], ckey_removery[5][: int(binascii.hexlify(ckey_removery[4]), 16)]
+        )
+        ckeys.append([offset, newckey])
+    return ckeys
+
+def process_ukeys(recoverd_block: BlockResults):
+    new_uckeys = []
+    for offset in recoverd_block.offsetlist:
+        ukey_removery = recov_uckey(recoverd_block.block, offset)
+        if ukey_removery:
+            new_uckeys.append(ukey_removery[4])
+    return new_uckeys
 
 def drop_first(e):
     if hasattr(e, "next"):
@@ -2855,54 +2874,53 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
     mkeys = []
     ckeys = []
     uckeys = []
-    for recoverd_block in search_patterns_on_disk(device, size, inc, nameToDBName.values()):
-        print("Found block")
-        # try:
-        #     otype=os.O_RDONLY|os.O_BINARY
-        # except:
-        #     otype=os.O_RDONLY
-        # fd = os.open(device, otype)
+    with open(f'./appendonly_{int(time.time())}.tmp', 'a') as append_only_file:
+        for recoverd_block in search_patterns_on_disk(device, size, inc, nameToDBName.values()):
+            print("Found block")
+            # try:
+            #     otype=os.O_RDONLY|os.O_BINARY
+            # except:
+            #     otype=os.O_RDONLY
+            # fd = os.open(device, otype)
 
-        if recoverd_block.pattern_bytes == nameToDBName["mkey"]:
-            new_mkeys = recov_mkey(recoverd_block)
-            mkeys.extend(new_mkeys)
-            # for offset in recoverd_block.offsetlist:
-            #     if mkey_recovery == None:
-            #         continue
-            #     if mkey_recovery[-1] == b"":
-            #         mkey_recovery = mkey_recovery[:-1]
-            #     newmkey = RecovMkey(
-            #         mkey_recovery[1],
-            #         mkey_recovery[3],
-            #         int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
-            #         int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
-            #         int(binascii.hexlify(mkey_recovery[-1][::-1]), 16),
-            #     )
-            #     mkeys.append([offset, newmkey])
+            if recoverd_block.pattern_bytes == nameToDBName["mkey"]:
+                new_mkeys = recov_mkey(recoverd_block)
+                mkeys.extend(new_mkeys)
+                for key in new_mkeys:
+                    append_only_file.write(f"Found master key at offset {key[0]}\n")
+                # for offset in recoverd_block.offsetlist:
+                #     if mkey_recovery == None:
+                #         continue
+                #     if mkey_recovery[-1] == b"":
+                #         mkey_recovery = mkey_recovery[:-1]
+                #     newmkey = RecovMkey(
+                #         mkey_recovery[1],
+                #         mkey_recovery[3],
+                #         int(binascii.hexlify(mkey_recovery[5][::-1]), 16),
+                #         int(binascii.hexlify(mkey_recovery[4][::-1]), 16),
+                #         int(binascii.hexlify(mkey_recovery[-1][::-1]), 16),
+                #     )
+                #     mkeys.append([offset, newmkey])
 
-        # for offset in recovered_chunks[repr(nameToDBName["ckey"])]:
-        if recoverd_block.pattern_bytes == nameToDBName["ckey"]:
-            for offset in recoverd_block.offsetlist:
-                ckey_removery = recov_ckey(recoverd_block.block, offset)
-                if ckey_removery is None:
-                    continue
-                newckey = RecovCkey(
-                    ckey_removery[1], ckey_removery[5][: int(binascii.hexlify(ckey_removery[4]), 16)]
-                )
-                ckeys.append([offset, newckey])
-            print("Found %d possible encrypted keys" % len(ckeys))
+            # for offset in recovered_chunks[repr(nameToDBName["ckey"])]:
+            if recoverd_block.pattern_bytes == nameToDBName["ckey"]:
+                new_ckeys = process_ckeys(recoverd_block)
+                ckeys.extend(new_ckeys)
+                for key in new_ckeys:
+                    append_only_file.write(f"Found ckey: {key}")
+                print("Found %d possible encrypted keys" % len(ckeys))
 
-        if recoverd_block.pattern_bytes == nameToDBName["key"]:
-            #for offset in recovered_chunks[repr(nameToDBName["key"])]:
-            for offset in recoverd_block.offsetlist:
-                ukey_removery = recov_uckey(recoverd_block.block, offset)
-                if ukey_removery:
-                    uckeys.append(ukey_removery[4])
-            uckeys = list(set(uckeys))
-            print("Found %d possible unencrypted keys" % len(uckeys))
+            if recoverd_block.pattern_bytes == nameToDBName["key"]:
+                #for offset in recovered_chunks[repr(nameToDBName["key"])]:
+                    new_uckeys = process_ukeys(recoverd_block)
+                    uckeys.extend(new_uckeys)
+                    for key in new_uckeys:
+                        append_only_file.write(f"Found unencrypted key: {key}")
+                    print("Found %d possible unencrypted keys" % len(uckeys))
 
 
 
+    uckeys = list(set(uckeys))
     list_of_possible_keys_per_master_key = dict(map(lambda x: [x[1], []], mkeys))
     for cko, ck in ckeys:
         tl = map(lambda x: [abs(x[0] - cko)] + x, mkeys)
