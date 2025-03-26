@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function
 
-from typing import Generator, Optional
-
+from typing import Generator, Optional, Tuple
+from optparse import OptionParser
 pywversion = "2.2"
 never_update = False
 
@@ -1788,7 +1788,7 @@ class AESModeOfOperation(object):
         output = []
         plaintext = [0] * 16
         # the output plain text string
-        stringOut = b""
+        stringOut: bytes = b""
         # char firstRound
         firstRound = True
         if cipherIn != None:
@@ -1804,6 +1804,7 @@ class AESModeOfOperation(object):
                         firstRound = False
                     else:
                         output = self.aes.encrypt(iput, key, size)
+                    assert output is not None, "Encryption failed"
                     for i in range(16):
                         if len(output) - 1 < i:
                             plaintext[i] = 0 ^ ciphertext[i]
@@ -1822,6 +1823,7 @@ class AESModeOfOperation(object):
                         firstRound = False
                     else:
                         output = self.aes.encrypt(iput, key, size)
+                    assert output is not None, "Encryption failed"
                     for i in range(16):
                         if len(output) - 1 < i:
                             plaintext[i] = 0 ^ ciphertext[i]
@@ -1836,6 +1838,7 @@ class AESModeOfOperation(object):
                     iput = output
                 elif mode == self.modeOfOperation["CBC"]:
                     output = self.aes.decrypt(ciphertext, key, size)
+                    assert output is not None, "Decryption failed"
                     for i in range(16):
                         if firstRound:
                             plaintext[i] = IV[i] ^ output[i]
@@ -1941,9 +1944,9 @@ class Crypter_ssl(object):
 
 class Crypter_pure(object):
     def __init__(self):
-        self.m = AESModeOfOperation()
-        self.cbc = self.m.modeOfOperation["CBC"]
-        self.sz = self.m.aes.keySize["SIZE_256"]
+        self.method_of_operation = AESModeOfOperation()
+        self.cbc = self.method_of_operation.modeOfOperation["CBC"]
+        self.sz = self.method_of_operation.aes.keySize["SIZE_256"]
 
     def SetKeyFromPassphrase(self, vKeyData, vSalt, nDerivIterations, nDerivationMethod):
         if nDerivationMethod != 0:
@@ -1962,14 +1965,14 @@ class Crypter_pure(object):
         self.chIV = [ordsix(i) for i in iv]
 
     def Encrypt(self, data):
-        mode, size, cypher = self.m.encrypt(
+        mode, size, cypher = self.method_of_operation.encrypt(
             append_PKCS7_padding(data), self.cbc, self.chKey, self.sz, self.chIV
         )
         return b"".join(map(chrsix, cypher))
 
     def Decrypt(self, data):
         chData = [ordsix(i) for i in data]
-        return self.m.decrypt(chData, self.sz, self.cbc, self.chKey, self.sz, self.chIV)
+        return self.method_of_operation.decrypt(chData, self.sz, self.cbc, self.chKey, self.sz, self.chIV)
 
 
 crypter = None
@@ -2768,7 +2771,7 @@ def recov_mkey(
         mkeys.append([offset, newmkey])
     return mkeys
 
-def process_ckeys(recoverd_block: BlockResults):
+def process_ckeys(recoverd_block: BlockResults) -> list[Tuple[int, RecovCkey]]:
     ckeys = []
     for offset in recoverd_block.offsetlist:
         ckey_removery = recov_ckey(recoverd_block.block, offset)
@@ -2780,7 +2783,7 @@ def process_ckeys(recoverd_block: BlockResults):
         ckeys.append([offset, newckey])
     return ckeys
 
-def process_ukeys(recoverd_block: BlockResults):
+def process_ukeys(recoverd_block: BlockResults) -> list[bytes]:
     new_uckeys = []
     for offset in recoverd_block.offsetlist:
         ukey_removery = recov_uckey(recoverd_block.block, offset)
@@ -2907,7 +2910,7 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
                 new_ckeys = process_ckeys(recoverd_block)
                 ckeys.extend(new_ckeys)
                 for key in new_ckeys:
-                    append_only_file.write(f"Found ckey: {key}")
+                    append_only_file.write(f"Found ckey: {key[1]}\n")
                 print("Found %d possible encrypted keys" % len(ckeys))
 
             if recoverd_block.pattern_bytes == nameToDBName["key"]:
@@ -2915,7 +2918,7 @@ def recov(device, passes, size=102400, inc=10240, outputdir="."):
                     new_uckeys = process_ukeys(recoverd_block)
                     uckeys.extend(new_uckeys)
                     for key in new_uckeys:
-                        append_only_file.write(f"Found unencrypted key: {key}")
+                        append_only_file.write(f"Found unencrypted key: {key.hex()}\n")
                     print("Found %d possible unencrypted keys" % len(uckeys))
 
 
@@ -4843,10 +4846,6 @@ def retrieve_last_pywallet_md5():
         True,
         md5_onlinefile("https://raw.github.com/jackjack-jj/pywallet/master/pywallet.py"),
     ]
-
-
-from optparse import OptionParser
-from typing import List, Optional, Tuple, Union
 
 
 def bech32_polymod(values):
